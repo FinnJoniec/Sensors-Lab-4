@@ -6,69 +6,82 @@ import serial
 import select
 import time
 
-# GROUP 1
+
+# LARGE TEAM
+ACTIVITY_ADDRESS = 3
+TEST_ADDRESS = 51
+
+
+# GROUP A - I2C
+#bus = smbus2.SMBus(1)
+PICO_SLAVE_ADDRESS_A = 0x08
+#example code
+#bus.write_byte(PICO_SLAVE_ADDRESS_A, 0x12)
+#data = bus.read_byte(PICO_SLAVE_ADDRESS_A)
+#print(f"Got data: {data}")
 #sending PICO sensor data to:
-OUTGOING_ADDRESS_1 = 24
-DATA_OUT_1 = 0
+OUTGOING_ADDRESS_A = 24
+DATA_OUT_A = 0
 #sending PICO activity bit:
-ACTIVITY_ADDRESS_1 = 24592
-ACTIVITY_BIT_1 = 0
+ACTIVITY_ADDRESS_A = 24591
+ACTIVITY_BIT_A = 0
 #reading from to PICO:
-INCOMING_ADDRESS_1 = 1
-DATA_IN_1 = 0
+INCOMING_ADDRESS_A = 1
+DATA_IN_A = 0
 #sending PICO's read data to:
-READ_DATA_ADDRESS_1 = 28
+READ_DATA_ADDRESS_A = 28
 '''___'''
 
-# GROUP 2
+# GROUP B - SPI
 #sending PICO sensor data to:
-OUTGOING_ADDRESS_2 = 25
-DATA_OUT_2 = 0
+OUTGOING_ADDRESS_B = 25
+DATA_OUT_B = 0
 #sending ESP32's activity bit:
-ACTIVITY_ADDRESS_2 = 24593
-ACTIVITY_BIT_2 = 0
+ACTIVITY_ADDRESS_B = 24592
+ACTIVITY_BIT_B = 0
 #reading from to ESP32:
-INCOMING_ADDRESS_2 = 0
-DATA_IN_2 = 0
+INCOMING_ADDRESS_B = 0
+DATA_IN_B = 0
 #sending PICO's read data to:
-READ_DATA_ADDRESS_2 = 29
+READ_DATA_ADDRESS_B = 29
 '''___'''
 
-# GROUP 3 
+# GROUP C - Custom GPIO Clock/Data
 #sending PICO sensor data to:
-OUTGOING_ADDRESS_1 = 26
-DATA_OUT_1 = 0
+OUTGOING_ADDRESS_C = 26
+DATA_OUT_C = 0
 #sending PICO activity bit:
-ACTIVITY_ADDRESS_1 = 24594
-ACTIVITY_BIT_1 = 0
+ACTIVITY_ADDRESS_C = 24593
+ACTIVITY_BIT_C = 0
 #reading from to PICO:
-INCOMING_ADDRESS_1 = 1
-DATA_IN_1 = 0
+INCOMING_ADDRESS_C = 1
+DATA_IN_C = 0
 #sending PICO's read data to:
-READ_DATA_ADDRESS_1 = 30
+READ_DATA_ADDRESS_C = 30
 '''___'''
 
-# GROUP 4
+# GROUP D - UART
 #sending PICO sensor data to:
-OUTGOING_ADDRESS_1 = 27
-DATA_OUT_1 = 0
+OUTGOING_ADDRESS_D = 27
+DATA_OUT_D = 0
 #sending PICO activity bit:
-ACTIVITY_ADDRESS_1 = 24595
-ACTIVITY_BIT_1 = 0
+ACTIVITY_ADDRESS_D = 24594
+ACTIVITY_BIT_D = 0
 #reading from to PICO:
-INCOMING_ADDRESS_1 = 1
-DATA_IN_1 = 0
+INCOMING_ADDRESS_D = 1
+DATA_IN_D = 0
 #sending PICO's read data to:
-READ_DATA_ADDRESS_1 = 31
+READ_DATA_ADDRESS_D = 31
 '''___'''
 
 #PLC info
 PLC_IP = "192.168.1.10"
 PLC_PORT = 502
 
-# COMMS FOR GROUP1 - UART
+# COMMS FOR GROUPD - UART
 ser = serial.Serial(
-	port = '/dev/serial0',
+	port = '/dev/serial0',        
+#NameError: name 'READ_DATA_ADDRESS_D'
 	baudrate=9600,
 	timeout=1
 	)
@@ -151,39 +164,41 @@ async def write_to_plc(address, send_data):
 		print(f"Unexpected eror {e}")
 
 # STARTING CONNECTIONS FOR MQTT
+"""
 client = mqtt.Client("PiSubscriber")
 client.on_connect = on_connect
 client.on_message = on_message
 client.connect("localhost",1883,60)
 client.loop_start()
+"""
 
 # MAIN LOOP
 try:
 	while True:
-		# UPDATING GROUP2
-		DATA_IN_2 = asyncio.run(read_from_plc(INCOMING_ADDRESS_2))	# reading data from PLC
-		asyncio.run(write_to_plc(READ_DATA_ADDRESS_2, int(DATA_IN_2)))   # sending data back to PLC
-		client.publish("pi/commands",int(DATA_IN_2)) # writing data to GROUP2
+		# UPDATING GROUPB
+		DATA_IN_B = asyncio.run(read_from_plc(INCOMING_ADDRESS_B))	# reading data from PLC
+		asyncio.run(write_to_plc(READ_DATA_ADDRESS_B, int(DATA_IN_B)))   # sending data back to PLC
+		#client.publish("pi/commands",int(DATA_IN_2)) # writing data to GROUP2
 		
-		# SCANNING GROUP1
+		# SCANNING GROUPB
 		data = ser.readline().decode('utf-8').strip()
 		parts = data.split(',')
-		DATA_OUT_1 = ''.join(c for c in parts[0] if c.isdigit()) if len(parts) > 0 else None
-		ACTIVITY_BIT_1 = ''.join(c for c in parts[1] if c.isdigit()) if len(parts) > 1 else None
-		if len(DATA_OUT_1) > 0: 
-			DATA_OUT_1 = int(float(DATA_OUT_1))
-			ACTIVITY_BIT_1 = int(ACTIVITY_BIT_1)
+		DATA_OUT_B = ''.join(c for c in parts[0] if c.isdigit()) if len(parts) > 0 else None
+		ACTIVITY_BIT_B = ''.join(c for c in parts[1] if c.isdigit()) if len(parts) > 1 else None
+		if len(DATA_OUT_B) > 0: 
+			DATA_OUT_B = int(float(DATA_OUT_B))
+			ACTIVITY_BIT_B = int(ACTIVITY_BIT_B)
 		else:
-			DATA_OUT_1 = 0
-			ACTIVITY_BIT_1 = 0
-		print(f"data out 1 {DATA_OUT_1} ac out 1 {ACTIVITY_BIT_1}")
-		asyncio.run(write_to_plc(OUTGOING_ADDRESS_1, DATA_OUT_1)) # sending GROUP1 data to PLC
-		asyncio.run(write_to_plc(ACTIVITY_ADDRESS_1, ACTIVITY_BIT_1)) # sending GROUP1 ac to PLC		
-		# UPDATING GROUP1
-		DATA_IN_1 = asyncio.run(read_from_plc(INCOMING_ADDRESS_1))	# reading data from PLC
+			DATA_OUT_B = 0
+			ACTIVITY_BIT_B = 0
+		print(f"data out 1 {DATA_OUT_B} ac out 1 {ACTIVITY_BIT_B}")
+		asyncio.run(write_to_plc(OUTGOING_ADDRESS_B, DATA_OUT_B)) # sending GROUP1 data to PLC
+		asyncio.run(write_to_plc(ACTIVITY_ADDRESS_B, ACTIVITY_BIT_B)) # sending GROUP1 ac to PLC		
+		'''# UPDATING GROUP1
+		DATA_IN_B = asyncio.run(read_from_plc(INCOMING_ADDRESS_B))	# reading data from PLC
 		asyncio.run(write_to_plc(READ_DATA_ADDRESS_1, DATA_IN_1)) # sending data back to PLC
 		ser.write(str(DATA_IN_1).encode())	# writing data to GROUP1
-		
+		'''
 except KeyboardInterrupt:
 	print("Exiting...")
 
