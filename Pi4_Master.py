@@ -1,10 +1,14 @@
-from pymodbus.client import AsyncModbusTcpClient
+from pymodbus.client import AsyncModbusTcpClient 
+import RPi.GPIO as GPIO
+import spidev as spidev
+
 #import paho.mqtt.client as mqtt
 import smbus2
 import asyncio
 import serial
 import select
 import time
+from collections import deque
 
 
 # LARGE TEAM
@@ -46,6 +50,42 @@ DATA_IN_B = 0
 READ_DATA_ADDRESS_B = 29
 '''___'''
 
+#Group B comms
+spi = spidev.SpiDev()
+spi.open(0, 0)
+spi.max_speed_hz = 1_000_000   # start at 1 MHz; adjust if needed
+spi.mode = 0                   # MODE0
+spi.bits_per_word = 8
+# Frame format: [0xAA][pot_hi][pot_lo][angle][checksum]
+FRAME_LEN = 5
+HEADER = 0xAA
+FRESH_SECS = 0.5
+last_ok_ts = 0.0
+latest_pot = 0
+latest_angle = 0
+def read_frame_from_esp32():
+    """
+    Master clocks 5 bytes from slave.
+    Returns (ok, pot, angle)
+    """
+    try:
+        rx = spi.xfer2([0x00] * FRAME_LEN)  # clock out 5 bytes
+        if len(rx) != FRAME_LEN:
+            return (False, 0, 0)
+        if rx[0] != HEADER:
+            return (False, 0, 0)
+        pot_hi, pot_lo, angle, csum = rx[1], rx[2], rx[3], rx[4]
+        calc = (pot_hi + pot_lo + angle) & 0xFF
+        if calc != csum:
+            return (False, 0, 0)
+        pot = ((pot_hi << 8) | pot_lo) & 0xFFFF
+        return (True, pot, angle)
+    except Exception as e:
+        # SPI bus error; keep calm, report once per loop
+        # print(f"SPI error: {e}")
+        return (False, 0, 0)
+
+
 # GROUP C - Custom GPIO Clock/Data
 #sending PICO sensor data to:
 OUTGOING_ADDRESS_C = 26
@@ -59,6 +99,26 @@ DATA_IN_C = 0
 #sending PICO's read data to:
 READ_DATA_ADDRESS_C = 30
 '''___'''
+
+# Group C Comms
+CLOCK_PIN = 18  # Pi BCM 18 (from ESP32 GPIO26)
+DATA_PIN  = 23  # Pi BCM 23 (from ESP32 GPIO27)
+
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(CLOCK_PIN, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+GPIO.setup(DATA_PIN,  GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+
+def read_angle_from_esp32():
+    """Read one 8-bit frame: sample DATA on each rising CLOCK."""
+    bits = []
+    while GPIO.input(CLOCK_PIN) == 1:
+        pass  # start when clock is low
+    while len(bits) < 8:
+        GPIO.wait_for_edge(CLOCK_PIN, GPIO.RISING)
+        bits.append(GPIO.input(DATA_PIN))
+    val = 0
+    for b in bits: val = (val << 1) | (1 if b else 0)
+    return min(max(val, 0), 180)
 
 # GROUP D - UART
 #sending PICO sensor data to:
@@ -75,7 +135,7 @@ READ_DATA_ADDRESS_D = 31
 '''___'''
 
 #PLC info
-PLC_IP = "192.168.1.10"
+PLC_IP = "192.168.1.22"
 PLC_PORT = 502
 
 # COMMS FOR GROUPD - UART
@@ -175,6 +235,33 @@ client.loop_start()
 # MAIN LOOP
 try:
 	while True:
+
+		print("Group B: SPI master (spidev) pulling frames from ESP32 slave. Ctrl+C to exit.")
+		# Echo pattern (same as your other groups)
+		DATA_IN_B = asyncio.run(read_from_plc(INCOMING_ADDRESS_B))
+		asyncio.run(write_to_plc(READ_DATA_ADDRESS_B, int(DATA_IN_B)))
+		ok, pot, angle = read_frame_from_esp32()
+		now = time.time()
+		if ok:
+			latest_pot = pot
+			latest_angle = angle
+			last_ok_ts = now
+
+			alive = 1 if (now - last_ok_ts) <= FRESH_SECS else 0
+			DATA_OUT_B = int(latest_pot)   # send pot (0..4095) to PLC
+			ACTIVITY_BIT_B = int(alive)
+
+			# Send to PLC
+			asyncio.run(write_to_plc(OUTGOING_ADDRESS_B, DATA_OUT_B))
+			asyncio.run(write_to_plc(ACTIVITY_ADDRESS_B, ACTIVITY_BIT_B))
+
+			# Debug
+			print(f"[B] pot={DATA_OUT_B:4d} angle={latest_angle:3d} alive={ACTIVITY_BIT_B} ok={int(ok)}")
+
+			time.sleep(0.05)  # ~20 Hz
+
+		
+		'''
 		# UPDATING GROUPB
 		DATA_IN_B = asyncio.run(read_from_plc(INCOMING_ADDRESS_B))	# reading data from PLC
 		asyncio.run(write_to_plc(READ_DATA_ADDRESS_B, int(DATA_IN_B)))   # sending data back to PLC
@@ -185,7 +272,7 @@ try:
 		parts = data.split(',')
 		DATA_OUT_B = ''.join(c for c in parts[0] if c.isdigit()) if len(parts) > 0 else None
 		ACTIVITY_BIT_B = ''.join(c for c in parts[1] if c.isdigit()) if len(parts) > 1 else None
-		if len(DATA_OUT_B) > 0: 
+		if len(DATA_OUT_B) > 0:
 			DATA_OUT_B = int(float(DATA_OUT_B))
 			ACTIVITY_BIT_B = int(ACTIVITY_BIT_B)
 		else:
@@ -194,16 +281,61 @@ try:
 		print(f"data out 1 {DATA_OUT_B} ac out 1 {ACTIVITY_BIT_B}")
 		asyncio.run(write_to_plc(OUTGOING_ADDRESS_B, DATA_OUT_B)) # sending GROUP1 data to PLC
 		asyncio.run(write_to_plc(ACTIVITY_ADDRESS_B, ACTIVITY_BIT_B)) # sending GROUP1 ac to PLC		
-		'''# UPDATING GROUP1
+		time.sleep(0.05)
+		
+		'''
+		#Updating Group A
+		DATA_IN_A = asyncio.run(read_from_plc(INCOMING_ADDRESS_A))	# reading data from PLC
+		asyncio.run(write_to_plc(READ_DATA_ADDRESS_A, int(DATA_IN_A)))   # sending data back to PLC
+		# Scanning Group A
+		data = ser.readline().decode('utf-8').strip()
+		parts = data
+		DATA_OUT_A = ''.join(c for c in parts[0] if c.isdigit()) if len(parts) > 0 else None
+		ACTIVITY_BIT_A = ''.join(c for c in parts[1] if c.isdigit()) if len(parts) > 1 else None
+		if len(DATA_OUT_A) > 0:
+			DATA_OUT_A = int(float(DATA_OUT_A))
+			ACTIVITY_BIT_A = int(ACTIVITY_BIT_A)
+		else:
+			DATA_OUT_A = 0
+			ACTIVITY_BIT_A = 0
+		print(f"data out 1 {DATA_OUT_A} ac out 1 {ACTIVITY_BIT_A}")
+		asyncio.run(write_to_plc(OUTGOING_ADDRESS_A, DATA_OUT_A)) # sending GROUP1 data to PLC
+		asyncio.run(write_to_plc(ACTIVITY_ADDRESS_A, ACTIVITY_BIT_A)) # sending GROUP1 ac to PLC		
+		time.sleep(0.05)
+		'''
+		#Updating Group D
 		DATA_IN_B = asyncio.run(read_from_plc(INCOMING_ADDRESS_B))	# reading data from PLC
-		asyncio.run(write_to_plc(READ_DATA_ADDRESS_1, DATA_IN_1)) # sending data back to PLC
-		ser.write(str(DATA_IN_1).encode())	# writing data to GROUP1
+		asyncio.run(write_to_plc(READ_DATA_ADDRESS_B, int(DATA_IN_B)))   # sending data back to PLC
+		#Scanning Group D
+		data = ser.readline().decode('utf-8').strip()
+		parts = data.split(',')
+		DATA_OUT_D = ''.join(c for c in parts[0] if c.isdigit()) if len(parts) > 0 else None
+		ACTIVITY_BIT_D = ''.join(c for c in parts[1] if c.isdigit()) if len(parts) > 1 else None
+		if len(DATA_OUT_D) > 0:
+			DATA_OUT_D = int(float(DATA_OUT_D))
+			ACTIVITY_BIT_D = int(ACTIVITY_BIT_D)
+		else:
+			DATA_OUT_D = 0
+			ACTIVITY_BIT_D = 0
+		print(f"data out 1 {DATA_OUT_D} ac out 1 {ACTIVITY_BIT_D}")
+		asyncio.run(write_to_plc(OUTGOING_ADDRESS_D, DATA_OUT_D)) # sending GROUP1 data to PLC
+		asyncio.run(write_to_plc(ACTIVITY_ADDRESS_D, ACTIVITY_BIT_D)) # sending GROUP1 ac to PLC		
+		time.sleep(0.05)
 		'''
 except KeyboardInterrupt:
 	print("Exiting...")
 
 finally:
-	ser.close()
+	try:
+		ser.close()
+		ser2.close()
+	except Exception:
+		pass
+	try:
+		spi.close()
+	except Exception:
+		pass
+
 	'''
 	for port in ports:
 		port.close()
