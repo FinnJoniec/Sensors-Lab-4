@@ -3,7 +3,7 @@ import RPi.GPIO as GPIO
 import spidev as spidev
 
 #import paho.mqtt.client as mqtt
-import smbus2
+from smbus2 import SMBus
 import asyncio
 import serial
 import select
@@ -15,27 +15,25 @@ from collections import deque
 ACTIVITY_ADDRESS = 3
 TEST_ADDRESS = 51
 
-
+SMBus
 # GROUP A - I2C
 #bus = smbus2.SMBus(1)
-PICO_SLAVE_ADDRESS_A = 0x08
-#example code
-#bus.write_byte(PICO_SLAVE_ADDRESS_A, 0x12)
-#data = bus.read_byte(PICO_SLAVE_ADDRESS_A)
-#print(f"Got data: {data}")
+I2C_ADDR = 0x08
+bus= SMBus(1)
 #sending PICO sensor data to:
 OUTGOING_ADDRESS_A = 24
 DATA_OUT_A = 0
 #sending PICO activity bit:
-ACTIVITY_ADDRESS_A = 24591
+ACTIVITY_ADDRESS_A = 24596
 ACTIVITY_BIT_A = 0
 #reading from to PICO:
 INCOMING_ADDRESS_A = 1
 DATA_IN_A = 0
 #sending PICO's read data to:
 READ_DATA_ADDRESS_A = 28
-'''___'''
 
+
+'''
 # GROUP B - SPI
 #sending PICO sensor data to:
 OUTGOING_ADDRESS_B = 25
@@ -48,11 +46,12 @@ INCOMING_ADDRESS_B = 0
 DATA_IN_B = 0
 #sending PICO's read data to:
 READ_DATA_ADDRESS_B = 29
-'''___'''
+
 
 #Group B comms
 spi = spidev.SpiDev()
 spi.open(0, 0)
+#spi.open_path("/home/markt/modbus-env/lib/python3.11/site-packages/spidev.cpython-311-aarch64-linux-gnu.so")
 spi.max_speed_hz = 1_000_000   # start at 1 MHz; adjust if needed
 spi.mode = 0                   # MODE0
 spi.bits_per_word = 8
@@ -98,7 +97,6 @@ INCOMING_ADDRESS_C = 1
 DATA_IN_C = 0
 #sending PICO's read data to:
 READ_DATA_ADDRESS_C = 30
-'''___'''
 
 # Group C Comms
 CLOCK_PIN = 18  # Pi BCM 18 (from ESP32 GPIO26)
@@ -119,7 +117,7 @@ def read_angle_from_esp32():
     val = 0
     for b in bits: val = (val << 1) | (1 if b else 0)
     return min(max(val, 0), 180)
-
+'''
 # GROUP D - UART
 #sending PICO sensor data to:
 OUTGOING_ADDRESS_D = 27
@@ -131,7 +129,7 @@ ACTIVITY_BIT_D = 0
 INCOMING_ADDRESS_D = 1
 DATA_IN_D = 0
 #sending PICO's read data to:
-READ_DATA_ADDRESS_D = 31
+READ_DATA_ADDRESS_D = 51
 '''___'''
 
 #PLC info
@@ -175,7 +173,7 @@ def on_message(client,user_data,msg):
 				asyncio.run(write_to_plc(ACTIVITY_ADDRESS_2, ACTIVITY_BIT_2)) # sending GROUP2 ac to PLC
 			except Error as e:
 				pass
-		else:
+		else:gulasadawson@yahoo.com
 			DATA_OUT_2 = 0
 			
 	except ValueError:
@@ -235,7 +233,7 @@ client.loop_start()
 # MAIN LOOP
 try:
 	while True:
-
+		'''
 		print("Group B: SPI master (spidev) pulling frames from ESP32 slave. Ctrl+C to exit.")
 		# Echo pattern (same as your other groups)
 		DATA_IN_B = asyncio.run(read_from_plc(INCOMING_ADDRESS_B))
@@ -262,6 +260,7 @@ try:
 
 		
 		'''
+		'''
 		# UPDATING GROUPB
 		DATA_IN_B = asyncio.run(read_from_plc(INCOMING_ADDRESS_B))	# reading data from PLC
 		asyncio.run(write_to_plc(READ_DATA_ADDRESS_B, int(DATA_IN_B)))   # sending data back to PLC
@@ -270,7 +269,7 @@ try:
 		# SCANNING GROUPB
 		data = ser.readline().decode('utf-8').strip()
 		parts = data.split(',')
-		DATA_OUT_B = ''.join(c for c in parts[0] if c.isdigit()) if len(parts) > 0 else None
+		DATA_OUT_B = ''.join(c for gulasadawson@yahoo.comc in parts[0] if c.isdigit()) if len(parts) > 0 else None
 		ACTIVITY_BIT_B = ''.join(c for c in parts[1] if c.isdigit()) if len(parts) > 1 else None
 		if len(DATA_OUT_B) > 0:
 			DATA_OUT_B = int(float(DATA_OUT_B))
@@ -282,7 +281,7 @@ try:
 		asyncio.run(write_to_plc(OUTGOING_ADDRESS_B, DATA_OUT_B)) # sending GROUP1 data to PLC
 		asyncio.run(write_to_plc(ACTIVITY_ADDRESS_B, ACTIVITY_BIT_B)) # sending GROUP1 ac to PLC		
 		time.sleep(0.05)
-		
+		'''
 		'''
 		#Updating Group A
 		DATA_IN_A = asyncio.run(read_from_plc(INCOMING_ADDRESS_A))	# reading data from PLC
@@ -300,12 +299,19 @@ try:
 			ACTIVITY_BIT_A = 0
 		print(f"data out 1 {DATA_OUT_A} ac out 1 {ACTIVITY_BIT_A}")
 		asyncio.run(write_to_plc(OUTGOING_ADDRESS_A, DATA_OUT_A)) # sending GROUP1 data to PLC
-		asyncio.run(write_to_plc(ACTIVITY_ADDRESS_A, ACTIVITY_BIT_A)) # sending GROUP1 ac to PLC		
+		asyncio.run(write_to_plc(ACTIVITY_ADDRESS_A, ACTIVITY_BIT_A)) # sending GROUP1 ac to PLC
+		'''
+		try:
+			angle = bus.read_byte(I2C_ADDR)
+			print("ANGLE:", angle)
+		except Exception as e:
+			print(f"Error {e}")
 		time.sleep(0.05)
+		
 		'''
 		#Updating Group D
-		DATA_IN_B = asyncio.run(read_from_plc(INCOMING_ADDRESS_B))	# reading data from PLC
-		asyncio.run(write_to_plc(READ_DATA_ADDRESS_B, int(DATA_IN_B)))   # sending data back to PLC
+		DATA_IN_D = asyncio.run(read_from_plc(INCOMING_ADDRESS_D))	# reading data from PLC
+		asyncio.run(write_to_plc(READ_DATA_ADDRESS_D, int(DATA_IN_D)))   # sending data back to PLC
 		#Scanning Group D
 		data = ser.readline().decode('utf-8').strip()
 		parts = data.split(',')
@@ -322,6 +328,22 @@ try:
 		asyncio.run(write_to_plc(ACTIVITY_ADDRESS_D, ACTIVITY_BIT_D)) # sending GROUP1 ac to PLC		
 		time.sleep(0.05)
 		'''
+		'''
+		 # Christmas Light Protocol
+		for i in range(5):
+			color = i
+			asyncio.run(write_to_plc(READ_DATA_ADDRESS_D, color)) # sending GROUP1 data to PLC
+            # Activity Bit Protocol
+			if ACTIVITY_BIT_D == 0:
+				ACTIVITY_BIT_D = 1
+			else:
+				ACTIVITY_BIT_D = 0
+		   
+			asyncio.run(write_to_plc(ACTIVITY_ADDRESS_D, ACTIVITY_BIT_D)) # sending GROUP1 data to PLC
+			time.sleep(1)
+		'''
+       
+
 except KeyboardInterrupt:
 	print("Exiting...")
 
@@ -336,7 +358,8 @@ finally:
 	except Exception:
 		pass
 
-	'''
+'''
 	for port in ports:
 		port.close()
-	'''
+
+'''
