@@ -33,7 +33,7 @@ DATA_IN_A = 0
 READ_DATA_ADDRESS_A = 28
 
 
-'''
+
 # GROUP B - Pulse-Width Encoding
 #sending PICO sensor data to:
 OUTGOING_ADDRESS_B = 25
@@ -47,44 +47,14 @@ DATA_IN_B = 0
 #sending PICO's read data to:
 READ_DATA_ADDRESS_B = 29
 
+# COMMS FOR GROUPB - UART
+sar = serial.Serial(
+	port = '/dev/COM4',        
+#NameError: name 'READ_DATA_ADDRESS_B'
+	baudrate=9600,
+	timeout=1
+	)
 
-
-GPIO.setwarnings(False)
-#Group B pin variables
-RX_PIN = 17   # Pi input (from ESP32)
-TX_PIN = 25   # Pi output (to ESP32)
-
-GPIO.setmode(GPIO.BCM)
-GPIO.setup(RX_PIN, GPIO.IN)
-GPIO.setup(TX_PIN, GPIO.OUT)
-
-
-def measure_pulse():
-    GPIO.wait_for_edge(RX_PIN, GPIO.RISING)
-    start = time.time()
-    GPIO.wait_for_edge(RX_PIN, GPIO.FALLING)
-    width = (time.time() - start) * 1_000_000  # µs
-    return width
-
-try:
-    while True:
-        width = measure_pulse()
-        if 400 < width < 2600:
-            angle = int((width - 500) * 180 / 2000)
-            print(f"Received pulse: {width:.1f} µs → {angle}°")
-
-            # echo pulse back to ESP32
-            pulse_out = 500 + (angle / 180) * 2000
-            GPIO.output(TX_PIN, GPIO.HIGH)
-            time.sleep(pulse_out / 1_000_000.0)
-            GPIO.output(TX_PIN, GPIO.LOW)
-
-        time.sleep(0.02)
-
-except KeyboardInterrupt:
-    GPIO.cleanup()
-
-'''
 
 # GROUP C - Custom GPIO Clock/Data
 #sending PICO sensor data to:
@@ -188,23 +158,29 @@ def read_frame():
 
     # 2) Read 4 bytes MSB-first on rising edges
     sync = read_byte()
+    print("sync")
     if sync is None:
         return None
     length = read_byte()
+    print("length")
     if length is None:
         return None
     angle = read_byte()
+    print("angle")
     if angle is None:
         return None
     chk = read_byte()
+    print("chk")
     if chk is None:
         return None
 
     # 3) Validate
     if sync != SYNC_BYTE:
         return None
+    print("sync 2")
     if length != LEN_BYTE:
         return None
+
     if chk != (SYNC_BYTE ^ LEN_BYTE ^ angle):
         return None
 
@@ -218,7 +194,10 @@ try:
     print("Reading frames... (Ctrl+C to quit)")
     last_valid = None
     while True:
-        angle = read_frame()
+        angle = read_frame()for c in parts[1] if c.isdigit()) if len(parts) > 1 else None
+		if len(DATA_OUT_B) > 0:
+			DATA_OUT_B = int(float(DATA_OUT_B))
+			ACTIVITY_BIT_B = int(ACT
         if angle is not None:
             if angle != last_valid:
                 print(f"Angle: {angle}")
@@ -260,13 +239,13 @@ ser = serial.Serial(
 	baudrate=9600,
 	timeout=1
 	)
-
+'''
 ser2 = serial.Serial(
 	port = '/dev/ttyAMA3',
 	baudrate=9600,
 	timeout=1
 )
-
+'''
 '''
 # COMMS FOR GROUP2 - MQTT
 
@@ -344,28 +323,6 @@ async def write_to_plc(address, send_data):
 try:
 	while True:
 		
-		# Echo pattern (same as your other groups)
-		DATA_IN_B = asyncio.run(read_from_plc(INCOMING_ADDRESS_B))
-		asyncio.run(write_to_plc(READ_DATA_ADDRESS_B, int(DATA_IN_B)))
-		ok, pot, angle = read_frame_from_esp32()
-		now = time.time()
-		if ok:
-			latest_pot = pot
-			latest_angle = angle
-			last_ok_ts = now
-			alive = 1 if (now - last_ok_ts) <= FRESH_SECS else 0
-			DATA_OUT_B = int(latest_pot)   # send pot (0..4095) to PLC
-			ACTIVITY_BIT_B = int(alive)
-
-			# Send to PLC
-			asyncio.run(write_to_plc(OUTGOING_ADDRESS_B, DATA_OUT_B))
-			asyncio.run(write_to_plc(ACTIVITY_ADDRESS_B, ACTIVITY_BIT_B))
-
-			# Debug
-			print(f"[B] pot={DATA_OUT_B:4d} angle={latest_angle:3d} alive={ACTIVITY_BIT_B} ok={int(ok)}")
-
-			time.sleep(0.05)  # ~20 Hz
-		'''
 		# UPDATING GROUPB
 		DATA_IN_B = asyncio.run(read_from_plc(INCOMING_ADDRESS_B))	# reading data from PLC
 		asyncio.run(write_to_plc(READ_DATA_ADDRESS_B, int(DATA_IN_B)))   # sending data back to PLC
@@ -386,7 +343,7 @@ try:
 		asyncio.run(write_to_plc(OUTGOING_ADDRESS_B, DATA_OUT_B)) # sending GROUP1 data to PLC
 		asyncio.run(write_to_plc(ACTIVITY_ADDRESS_B, ACTIVITY_BIT_B)) # sending GROUP1 ac to PLC		
 		time.sleep(0.05)
-		'''
+		
 		
 		#Updating Group A
 		DATA_IN_A = asyncio.run(read_from_plc(INCOMING_ADDRESS_A))	# reading data from PLC
@@ -397,7 +354,10 @@ try:
 		DATA_OUT_A = ''.join(c for c in parts[0] if c.isdigit()) if len(parts) > 0 else None
 		ACTIVITY_BIT_A = ''.join(c for c in parts[1] if c.isdigit()) if len(parts) > 1 else None
 		if len(DATA_OUT_A) > 0:
-			DATA_OUT_A = int(float(DATA_OUT_A))
+			DATA_OUT_A = int(float(DATA_OUT_A)for c in parts[1] if c.isdigit()) if len(parts) > 1 else None
+		if len(DATA_OUT_B) > 0:
+			DATA_OUT_B = int(float(DATA_OUT_B))
+			ACTIVITY_BIT_B = int(ACT)
 			ACTIVITY_BIT_A = int(ACTIVITY_BIT_A)
 		else:
 			DATA_OUT_A = 0
@@ -485,13 +445,10 @@ except KeyboardInterrupt:
 finally:
 	try:
 		ser.close()
-		ser2.close()
+		#ser2.close()
 	except Exception:
 		pass
-	try:
-		spi.close()
-	except Exception:
-		pass
+
 
 '''
 	for port in ports:
