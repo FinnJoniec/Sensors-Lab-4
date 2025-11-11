@@ -49,233 +49,19 @@ READ_DATA_ADDRESS_B = 29
 
 # COMMS FOR GROUPB - UART
 sar = serial.Serial(
-	port = '/dev/COM4',        
+	port = '/dev/ttyAMA5',        
 #NameError: name 'READ_DATA_ADDRESS_B'
 	baudrate=9600,
 	timeout=1
 	)
-
-
-# GROUP C - Custom GPIO Clock/Data
-#sending PICO sensor data to:
-OUTGOING_ADDRESS_C = 26
-DATA_OUT_C = 0
-#sending PICO activity bit:
-ACTIVITY_ADDRESS_C = 24593
-ACTIVITY_BIT_C = 0
-#reading from to PICO:
-INCOMING_ADDRESS_C = 1
-DATA_IN_C = 0
-#sending PICO's read data to:
-READ_DATA_ADDRESS_C = 30
-
-# Group C fixed pin variables
-CLOCK_PIN = 18   # from ESP32 GPIO26
-DATA_PIN  = 23   # from ESP32 GPIO27
-SERVO_PIN = 12   # servo control signal (PWM) — adjust if you like
-
-SYNC_BYTE = 0xA5
-LEN_BYTE  = 0x01
-
-GPIO.setmode(GPIO.BCM)
-GPIO.setup(CLOCK_PIN, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
-GPIO.setup(DATA_PIN,  GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
-GPIO.setup(SERVO_PIN, GPIO.OUT)
-GPIO.setwarnings(False)
-# --- Servo setup: 50 Hz ---
-servo = GPIO.PWM(SERVO_PIN, 50)  # 50 Hz
-servo.start(0)
-
-def angle_to_duty(angle_deg):
-    # Typical: 0deg≈0.5ms, 180deg≈2.5ms at 50Hz (20ms period)
-    # duty% = (pulse_ms / 20ms) * 100  => 0.5ms->2.5%, 2.5ms->12.5%
-    pulse_ms = 0.5 + (2.0 * (angle_deg / 180.0))
-    return (pulse_ms / 20.0) * 100.0
-
-def wait_rising(timeout_s=0.05):
-    # Polling wait for rising edge to be robust vs RPi.GPIO wait_for_edge timing
-    end = time.time() + timeout_s
-    last = GPIO.input(CLOCK_PIN)
-    while time.time() < end:
-        cur = GPIO.input(CLOCK_PIN)
-        if last == 0 and cur == 1:
-            return True
-        last = cur
-    return False
-
-def wait_falling(timeout_s=0.05):
-    end = time.time() + timeout_s
-    last = GPIO.input(CLOCK_PIN)
-    while time.time() < end:
-        cur = GPIO.input(CLOCK_PIN)
-        if last == 1 and cur == 0:
-            return True
-        last = cur
-    return False
-
-def read_bit(timeout_s=0.05):
-    # Sample DATA on rising edge, per your ESP32 sender
-    if not wait_rising(timeout_s):
-        return None
-    bit = GPIO.input(DATA_PIN)
-    # ensure we consume this clock and be ready for next edge
-    if not wait_falling(timeout_s):
-        return None
-    return bit
-
-def read_byte():
-    val = 0
-    for i in range(8):
-        b = read_bit()
-        if b is None:
-            return None
-        val = (val << 1) | (1 if b else 0)
-    return val
-
-def wait_frame_gap(min_low_time=0.001, overall_timeout=0.2):
-    """
-    Wait for the inter-frame low gap on CLOCK (~FRAME_GAP_US).
-    We detect CLOCK staying low for at least min_low_time seconds.
-    """
-    t_end = time.time() + overall_timeout
-    while time.time() < t_end:
-        # Wait for clock to go low
-        if GPIO.input(CLOCK_PIN) == 0:
-            t0 = time.time()
-            # stay low long enough?
-            while GPIO.input(CLOCK_PIN) == 0:
-                if (time.time() - t0) >= min_low_time:
-                    return True
-                # short sleep to reduce CPU
-                time.sleep(0.00005)
-        time.sleep(0.00005)
-    return False
-
-def read_frame():
-    # 1) Wait for a noticeable low gap between frames
-    if not wait_frame_gap(min_low_time=0.0015):   # ~1.5ms to match FRAME_GAP_US
-        return None
-
-    # 2) Read 4 bytes MSB-first on rising edges
-    sync = read_byte()
-    print("sync")
-    if sync is None:
-        return None
-    length = read_byte()
-    print("length")
-    if length is None:
-        return None
-    angle = read_byte()
-    print("angle")
-    if angle is None:
-        return None
-    chk = read_byte()
-    print("chk")
-    if chk is None:
-        return None
-
-    # 3) Validate
-    if sync != SYNC_BYTE:
-        return None
-    print("sync 2")
-    if length != LEN_BYTE:
-        return None
-
-    if chk != (SYNC_BYTE ^ LEN_BYTE ^ angle):
-        return None
-
-    return angle
-
-def set_servo(angle):
-    angle = max(0, min(180, angle))
-    servo.ChangeDutyCycle(angle_to_duty(angle))
-
-try:
-    print("Reading frames... (Ctrl+C to quit)")
-    last_valid = None
-    while True:
-        angle = read_frame()for c in parts[1] if c.isdigit()) if len(parts) > 1 else None
-		if len(DATA_OUT_B) > 0:
-			DATA_OUT_B = int(float(DATA_OUT_B))
-			ACTIVITY_BIT_B = int(ACT
-        if angle is not None:
-            if angle != last_valid:
-                print(f"Angle: {angle}")
-                set_servo(angle)
-                last_valid = angle
-        else:
-            # No valid frame this loop; tiny sleep so we don't spin too hard
-            time.sleep(0.001)
-
-except KeyboardInterrupt:
-    pass
-finally:
-    servo.stop()
-    GPIO.cleanup()
-
-
-# GROUP D - UART
-#sending PICO sensor data to:
-OUTGOING_ADDRESS_D = 27
-DATA_OUT_D = 0
-#sending PICO activity bit:
-ACTIVITY_ADDRESS_D = 24594
-ACTIVITY_BIT_D = 0
-#reading from to PICO:
-INCOMING_ADDRESS_D = 1
-DATA_IN_D = 0
-#sending PICO's read data to:
-READ_DATA_ADDRESS_D = 51
-
+	
 
 #PLC info
 PLC_IP = "192.168.1.22"
 PLC_PORT = 502
 
-# COMMS FOR GROUPD - UART
-ser = serial.Serial(
-	port = '/dev/serial0',        
-#NameError: name 'READ_DATA_ADDRESS_D'
-	baudrate=9600,
-	timeout=1
-	)
-'''
-ser2 = serial.Serial(
-	port = '/dev/ttyAMA3',
-	baudrate=9600,
-	timeout=1
-)
-'''
-'''
-# COMMS FOR GROUP2 - MQTT
 
-def on_connect(client,user_data,flags,rc):
-	print(f"Connected with result code {rc}")
-	client.subscribe("test/topic")
 
-		
-def on_message(client,user_data,msg):
-	try:
-		# SCANNING GROUP2
-		payload = msg.payload.decode() # payload from ESP32
-		parts = payload.split(",") # splitting payload into data and ac bit 
-		if len(parts) == 2:
-			DATA_OUT_2 = parts[0] # data
-			ACTIVITY_BIT_2 = parts[1] # ac 
-			DATA_OUT_2 = int(float(DATA_OUT_2))
-			ACTIVITY_BIT_2 = int(float(ACTIVITY_BIT_2))
-			#print(f"data out 2 {DATA_OUT_2} ac out 2 {ACTIVITY_BIT_2}")
-			try:
-				asyncio.run(write_to_plc(OUTGOING_ADDRESS_2, DATA_OUT_2)) # sending GROUP2 data to PLC
-				asyncio.run(write_to_plc(ACTIVITY_ADDRESS_2, ACTIVITY_BIT_2)) # sending GROUP2 ac to PLC
-			except Error as e:
-				pass
-		else:
-			DATA_OUT_2 = 0
-			
-	except ValueError:
-		pass
-	'''
 # READING DATA FROM PLC
 async def read_from_plc(address):
 	client = AsyncModbusTcpClient(PLC_IP,port=PLC_PORT)
@@ -307,7 +93,122 @@ async def write_to_plc(address, send_data):
 	try:
 		async with AsyncModbusTcpClient(PLC_IP,port=PLC_PORT) as client:
 			result = await client.write_register(address,send_data)
-			
+			if result.isError():
+				print(f"Error writing to coil {address} : {result}")
+			else:
+				#print(f"Successfully wrote {send_data} to coil {address}")
+				i = 0
+
+	except Exception as e:
+		print(f"Unexpected eror {e}")
+	
+	
+
+
+# GROUP C - Custom GPIO Clock/Data
+#sending PICO sensor data to:
+OUTGOING_ADDRESS_C = 26
+DATA_OUT_C = 0
+#sending PICO activity bit:
+ACTIVITY_ADDRESS_C = 24593
+ACTIVITY_BIT_C = 0
+#reading from to PICO:
+INCOMING_ADDRESS_C = 1
+DATA_IN_C = 0
+#sending PICO's read data to:
+READ_DATA_ADDRESS_C = 30    
+                                                                     
+# Group C fixed pin variables
+CLOCK_PIN = 18  
+DATA_PIN  = 23   
+
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(CLOCK_PIN, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+GPIO.setup(DATA_PIN,  GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+
+GPIO.setwarnings(False)
+
+def recieve_byte():
+	value = 0
+	for i in range(8):
+		while GPIO.input(CLOCK_PIN) == 0:
+			pass
+		bit = GPIO.input(DATA_PIN)
+		value = (value << 1) | bit
+		while GPIO.input(CLOCK_PIN) == 1:
+			pass
+	return value
+
+def send_byte(value):
+	time.sleep(.001)
+	GPIO.setup(DATA_PIN, GPIO.OUT)
+	for i in range(7, -1, -1):
+		while GPIO.input(CLOCK_PIN) == 0:
+			pass  # wait for rising edge start
+		GPIO.output(DATA_PIN, (value >> i) & 1)
+		while GPIO.input(CLOCK_PIN) == 1:
+			pass
+	time.sleep(.001)
+	GPIO.setup(DATA_PIN, GPIO.IN)
+
+
+# GROUP D - UART
+#sending PICO sensor data to:
+OUTGOING_ADDRESS_D = 27
+DATA_OUT_D = 0
+#sending PICO activity bit:
+ACTIVITY_ADDRESS_D = 24594
+ACTIVITY_BIT_D = 0
+#reading from to PICO:
+INCOMING_ADDRESS_D = 1
+DATA_IN_D = 0
+#sending PICO's read data to:
+READ_DATA_ADDRESS_D = 51
+
+
+#PLC info
+PLC_IP = "192.168.1.22"
+PLC_PORT = 502
+
+# COMMS FOR GROUPD - UART
+ser = serial.Serial(
+	port = '/dev/serial0',        
+#NameError: name 'READ_DATA_ADDRESS_D'
+	baudrate=9600,
+	timeout=1
+	)
+
+# READING DATA FROM PLC
+async def read_from_plc(address):
+	client = AsyncModbusTcpClient(PLC_IP,port=PLC_PORT)
+	time.sleep(0.02)
+	await client.connect()
+	value = 0
+	if client.connected:
+		result = await client.read_holding_registers(address)
+		if not result.isError():
+			value = result.registers[0]
+			if value:
+				#print(f"data from port {address} = {value}")
+				value = value
+			else:
+				#print(f"coil {address} is not active")
+				value = value
+		
+		else:
+			print(f"modbus error reading {address} : {value}")
+			value = value
+	else:
+		print("Connection failed")
+	
+	client.close()
+	return value
+
+# WRITING DATA TO PLC
+async def write_to_plc(address, send_data):
+	try:
+		async with AsyncModbusTcpClient(PLC_IP,port=PLC_PORT) as client:
+			result = await client.write_register(address,send_data)
 			if result.isError():
 				print(f"Error writing to coil {address} : {result}")
 			else:
@@ -329,7 +230,7 @@ try:
 		#client.publish("pi/commands",int(DATA_IN_2)) # writing data to GROUP2
 		
 		# SCANNING GROUPB
-		data = ser.readline().decode('utf-8').strip()
+		data = sar.readline().decode('utf-8').strip()
 		parts = data.split(',')
 		DATA_OUT_B = ''.join(c for c in parts[0] if c.isdigit()) if len(parts) > 0 else None
 		ACTIVITY_BIT_B = ''.join(c for c in parts[1] if c.isdigit()) if len(parts) > 1 else None
@@ -339,42 +240,81 @@ try:
 		else:
 			DATA_OUT_B = 0
 			ACTIVITY_BIT_B = 0
-		print(f"data out 1 {DATA_OUT_B} ac out 1 {ACTIVITY_BIT_B}")
+		print("Group B")
+		print(f"angle: {DATA_OUT_B} activity bit:{ACTIVITY_BIT_B}")
 		asyncio.run(write_to_plc(OUTGOING_ADDRESS_B, DATA_OUT_B)) # sending GROUP1 data to PLC
 		asyncio.run(write_to_plc(ACTIVITY_ADDRESS_B, ACTIVITY_BIT_B)) # sending GROUP1 ac to PLC		
-		time.sleep(0.05)
+		
+		#  Lab 4B Extension – Control Within Table (Random Pairing)
+        # --------------------------------------------------------------
+
+        # 1 Random partner selection every ~30 seconds
+		if "pair_change_time" not in locals():
+			pair_change_time = time.time()
+			current_partner = "A"  # initial partner
+		if time.time() - pair_change_time > 30:
+			import random
+			current_partner = random.choice(["A", "C", "D"])
+			pair_change_time = time.time()
+			print(f"\n[Lab4B] Now paired with Group {current_partner}")
+
+        # 2 Map partner → address
+		partner_address_map = {"A": OUTGOING_ADDRESS_A,
+								"C": OUTGOING_ADDRESS_C,
+                               "D": OUTGOING_ADDRESS_D}
+		partner_address = partner_address_map[current_partner]
+
+        # 3️ Read partner's potentiometer value from PLC
+		partner_val = 25
+        #asyncio.run(read_from_plc(partner_address))
+
+        # 4 Send that value to our ESP32 via UART
+        #    (so our servo mimics the partner’s potentiometer)
+		if partner_val is not None:
+			msg = f"{partner_val}\n"
+			sar.write(msg.encode())
+			print(f"[Lab4B] Sent partner value {partner_val} → ESP32")
+
+        # 5 Scale to 0–5000 and write to our own Read Address for HMI display
+		scaled_val = max(0, min(5000, int(partner_val * (5000 / 180))))
+		asyncio.run(write_to_plc(READ_DATA_ADDRESS_B, scaled_val))
+
+		time.sleep(.1)
 		
 		
-		#Updating Group A
+		############################################################################################
+		###      GROUP A      ######################################################################
+		############################################################################################
+		
 		DATA_IN_A = asyncio.run(read_from_plc(INCOMING_ADDRESS_A))	# reading data from PLC
 		asyncio.run(write_to_plc(READ_DATA_ADDRESS_A, int(DATA_IN_A)))   # sending data back to PLC
 		# Scanning Group A
 		data = ser.readline().decode('utf-8').strip()
 		parts = data
+		'''
 		DATA_OUT_A = ''.join(c for c in parts[0] if c.isdigit()) if len(parts) > 0 else None
 		ACTIVITY_BIT_A = ''.join(c for c in parts[1] if c.isdigit()) if len(parts) > 1 else None
 		if len(DATA_OUT_A) > 0:
 			DATA_OUT_A = int(float(DATA_OUT_A)for c in parts[1] if c.isdigit()) if len(parts) > 1 else None
-		if len(DATA_OUT_B) > 0:
-			DATA_OUT_B = int(float(DATA_OUT_B))
-			ACTIVITY_BIT_B = int(ACT)
-			ACTIVITY_BIT_A = int(ACTIVITY_BIT_A)
+			ACTIVITY_BIT_A = int(ACTIVITY_BIT_A)ocument
 		else:
 			DATA_OUT_A = 0
 			ACTIVITY_BIT_A = 0
-		print(f"data out 1 {DATA_OUT_A} ac out 1 {ACTIVITY_BIT_A}")
+			'''
 		asyncio.run(write_to_plc(OUTGOING_ADDRESS_A, DATA_OUT_A)) # sending GROUP1 data to PLC
 		asyncio.run(write_to_plc(ACTIVITY_ADDRESS_A, ACTIVITY_BIT_A)) # sending GROUP1 ac to PLC
-		'''
 		
+		data_to_send = 223
+		bus.write_byte(I2C_ADDR, data_to_send)
 		
-		'''
-		try:
-			angle = bus.read_byte(I2C_ADDR)
-			print("ANGLE:", angle)
-		except Exception as e:
-			print(f"Error {e}")
-		time.sleep(0.05)
+		angle = bus.read_byte(I2C_ADDR)
+		
+		print(f"GROUP A | ANGLE IN: {angle} | OUTGOING DATA: {data_to_send}")
+			
+		############################################################################################
+		############################################################################################
+		############################################################################################
+		
 		
 		#Group C
 		DATA_IN_C = asyncio.run(read_from_plc(INCOMING_ADDRESS_C))	# reading data from PLC
@@ -390,20 +330,20 @@ try:
 		else:
 			DATA_OUT_C = 0
 			ACTIVITY_BIT_C = 0
-		print(f"data out 1 {DATA_OUT_C} ac out 1 {ACTIVITY_BIT_C}")
+		angle = recieve_byte()
+		
+		# Prepare a response (e.g. angle + 5)
+		response = (angle + 5) & 0xFF
+		time.sleep(.001)
+		send_byte(response)
+		print(f"Group C Angle-> Recieved: {angle}, Sent {response}")
 		asyncio.run(write_to_plc(OUTGOING_ADDRESS_C, DATA_OUT_C)) # sending GROUP1 data to PLC
 		asyncio.run(write_to_plc(ACTIVITY_ADDRESS_C, ACTIVITY_BIT_C)) # sending GROUP1 ac to PLC		
-		time.sleep(0.05)
+		
+		
 
-		try:
-			while True:
-				angle = read_frame()
-				if angle is not None:
-					print(f"ANGLE={angle}")
-
-		except Exception as e:
-			print(f"Error {e}")
-			
+	
+	############################################################################################
 		#Updating Group D
 		DATA_IN_D = asyncio.run(read_from_plc(INCOMING_ADDRESS_D))	# reading data from PLC
 		asyncio.run(write_to_plc(READ_DATA_ADDRESS_D, int(DATA_IN_D)))   # sending data back to PLC
@@ -418,15 +358,54 @@ try:
 		else:
 			DATA_OUT_D = 0
 			ACTIVITY_BIT_D = 0
+			
+		print("Group D")
 		print(f"data out 1 {DATA_OUT_D} ac out 1 {ACTIVITY_BIT_D}")
 		asyncio.run(write_to_plc(OUTGOING_ADDRESS_D, DATA_OUT_D)) # sending GROUP1 data to PLC
 		asyncio.run(write_to_plc(ACTIVITY_ADDRESS_D, ACTIVITY_BIT_D)) # sending GROUP1 ac to PLC		
-		time.sleep(0.05)
+		
+		        # --------------------------------------------------------------
+        #  Lab 4B Extension – Control Within Table (Random Pairing)
+        # --------------------------------------------------------------
+
+        # 1 Random partner selection every ~30 seconds
+		if "pair_change_time" not in locals():
+			pair_change_time = time.time()
+			current_partner = "A"  # initial partner
+		if time.time() - pair_change_time > 30:
+			import random
+			current_partner = random.choice(["A", "B", "C"])
+			pair_change_time = time.time()
+			print(f"\n[Lab4B] Now paired with Group {current_partner}")
+
+        # 2 Map partner → address
+		partner_address_map = {"A": OUTGOING_ADDRESS_A,
+								"B": OUTGOING_ADDRESS_B,
+                               "C": OUTGOING_ADDRESS_C}
+		partner_address = partner_address_map[current_partner]
+
+        # 3️ Read partner's potentiometer value from PLC
+		partner_val = 50
+        #asyncio.run(read_from_plc(partner_address))
+
+        # 4 Send that value to our Pico via UART
+        #    (so our servo mimics the partner’s potentiometer)
+		if partner_val is not None:
+			msg = f"{partner_val}\n"
+			ser.write(msg.encode())
+			print(f"[Lab4B] Sent partner value {partner_val} → Pico")
+
+        # 5 Scale to 0–5000 and write to our own Read Address for HMI display
+		scaled_val = max(0, min(5000, int(partner_val * (5000 / 180))))
+		asyncio.run(write_to_plc(READ_DATA_ADDRESS_D, scaled_val))
+
+		time.sleep(.1)
+		
 		
 		'''
 		 # Christmas Light Protocol
 		for i in range(5):
-			color = i
+			color = iocument
 			asyncio.run(write_to_plc(READ_DATA_ADDRESS_D, color)) # sending GROUP1 data to PLC
             # Activity Bit Protocol
 			if ACTIVITY_BIT_D == 0:
