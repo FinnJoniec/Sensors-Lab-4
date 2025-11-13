@@ -148,16 +148,19 @@ def _wait_level(pin, level, timeout=0.5):
     return True
 
 def read_byte(timeout=0.5):
-    """Read 8 bits MSB-first while ESP32 provides CLOCK; sample DATA during HIGH."""
-    val = 0
-    for _ in range(8):
-        if not _wait_level(CLOCK_PIN, 1, timeout):   # wait rising
-            return None
-        bit = 1 if GPIO.input(DATA_PIN) else 0
-        val = (val << 1) | bit
-        if not _wait_level(CLOCK_PIN, 0, timeout):   # wait falling
-            return None
-    return val
+	val = 0
+	for _ in range(8):
+		if not _wait_level(CLOCK_PIN, 1, timeout):
+			return None
+		#while GPIO.input(CLOCK_PIN) == 0:
+		#	pass
+		bit = GPIO.input(DATA_PIN)
+		val = (val << 1) | bit
+		if not _wait_level(CLOCK_PIN, 0, timeout):
+			return None
+		#while GPIO.input(CLOCK_PIN) == 1:
+		#	pass
+	return val
 
 def read_frame(timeout=2.0):
     """Find SYNC, then LEN, then payload bytes; returns list[int] or None."""
@@ -179,22 +182,31 @@ def read_frame(timeout=2.0):
             return payload
     return None
 
+
 def send_byte(value):
-    """
-    Pi replies one byte while ESP32 supplies CLOCK for the reply.
-    We: wait for rising, set DATA bit, hold until falling; repeat.
-    """
-    GPIO.setup(DATA_PIN, GPIO.OUT, initial=GPIO.LOW)
-    try:
-        for i in range(7, -1, -1):
-            if not _wait_level(CLOCK_PIN, 1, 0.5):  # wait rising
-                return False
-            GPIO.output(DATA_PIN, (value >> i) & 1)
-            if not _wait_level(CLOCK_PIN, 0, 0.5):  # wait falling
-                return False
-        return True
-    finally:
-        GPIO.setup(DATA_PIN, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)		
+	"""
+	Pi replies one byte while ESP32 supplies CLOCK for the reply.
+	We: wait for rising, set DATA bit, hold until falling; repeat.
+	"""
+	#time.sleep(.005)
+	GPIO.setup(DATA_PIN, GPIO.OUT, initial=GPIO.LOW)
+	GPIO.output(DATA_PIN, 1)
+	time.sleep(.0002)
+	GPIO.output(DATA_PIN, 0)
+	time.sleep(.0002)
+	try:
+		for i in range(7, -1, -1):
+			#bit = (value >> i) & 1
+			#GPIO.output(DATA_PIN, bit) 
+			if not _wait_level(CLOCK_PIN, 1, 0.01):  # wait rising
+				break
+			GPIO.output(DATA_PIN, (value >> i) & 1)
+			if not _wait_level(CLOCK_PIN, 0, 0.01):  # wait falling
+				break
+		time.sleep(.0005)
+	finally:
+		GPIO.setup(DATA_PIN, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+
 
 # GROUP D - UART
 #sending PICO sensor data to:
@@ -349,33 +361,51 @@ def group_b():
 	time.sleep(0.1)
 
 	
-	
-	
+'''	
+def group_c_read():
+	global DATA_OUT_C
+	payload = read_byte()
+	if payload is None:
+		return
+	DATA_OUT_C = max(0, min(180, payload))
+'''	
 def group_c():
-		global ACTIVITY_BIT_C, DATA_OUT_C, DATA_IN_C, partner_val
-		payload = read_frame(timeout=2.0)
-		if not payload:
+		global ACTIVITY_BIT_C, DATA_OUT_C, DATA_IN_C
+		#payload = read_frame(timeout=2.0)
+		payload = read_byte()
+		if payload is None:
+			ACTIVITY_BIT_C = 0
 			return  # nothing received this tick
-
-		DATA_OUT_C = payload[0] & 0xFF
-
+		#DATA_OUT_C = payload & 0xFF
+		DATA_OUT_C = max(0, min(180, payload))
+		ACTIVITY_BIT_C = 1
 		# 2) REPLY IMMEDIATELY so the ESP32 sees it during its reply window
-		DATA_IN_C = (DATA_OUT_C) & 0xFF
+		#DATA_IN_C = (0) & 0xFF
+		#reply_ok = send_byte(DATA_IN_C)
+		#if not reply_ok:
+			#print("Group C: send_byte failed or times out")
 		#ok = send_byte(DATA_IN_C)
 
 		#print(f"Group C Angle -> Received: {DATA_OUT_C}, Sent: {DATA_IN_C}, reply_ok={ok}")
 
 		# 3) AFTER replying, do slower I/O (PLC + serial)
 		try:
+			asyncio.run(write_to_plc(OUTGOING_ADDRESS_C, int(DATA_OUT_C)))
+			asyncio.run(write_to_plc(ACTIVITY_ADDRESS_C, int(ACTIVITY_BIT_C)))
+		except Exception as e:
+			print("write plc error:", e)
+		try:
 			# Read from PLC and mirror back
 			DATA_IN_C = asyncio.run(read_from_plc(INCOMING_ADDRESS_C))
+			DATA_IN_C = max(0, min(180, DATA_IN_C))
 			asyncio.run(write_to_plc(READ_DATA_ADDRESS_C, int(DATA_IN_C)))
-
 			# Optional serial scan (make sure 'ser' exists and has small timeout)
+			'''
 			try:
 				line = ser.readline().decode('utf-8', errors='ignore').strip()
 			except Exception:
 				line = ""
+			
 
 			if line:
 				parts = line.split(',')
@@ -390,11 +420,10 @@ def group_c():
 			else:
 				DATA_OUT_C = 0
 				ACTIVITY_BIT_C = 0
+			'''
 
-			asyncio.run(write_to_plc(OUTGOING_ADDRESS_C, int(DATA_OUT_C)))
-			asyncio.run(write_to_plc(ACTIVITY_ADDRESS_C, int(ACTIVITY_BIT_C)))
 		except Exception as e:
-			print("Group C I/O error:", e)
+			print("read plc error", e)
 		
 
 
@@ -420,14 +449,13 @@ def group_d():
 try:
 	groups = ['A', 'B', 'C', 'D']
 	assigned_group = random.choice(groups)
-	print(f"\nGroup {assigned_group} is in control.")
 	last_assignment_time = time.time()
 	while True:
 		group_a()
-		group_b()
+		#group_b()
 		group_c()
 		#group_d()
-		
+		DATA_OUT_C = max(0, min(180, DATA_OUT_C))	
 		outgoing_addresses = [OUTGOING_ADDRESS_A, OUTGOING_ADDRESS_B, OUTGOING_ADDRESS_C, OUTGOING_ADDRESS_D]
 		if time.time() - last_assignment_time < 30:
 			if assigned_group == 'A':
@@ -452,13 +480,12 @@ try:
 				DATA_IN_D = DATA_OUT_D
 		else:
 			assigned_group = random.choice(groups)
-			print(f"\nGroup {assigned_group} is in control.")
 			last_assignment_time = time.time()
-		
+		print(DATA_IN_C)
 		bus.write_byte(I2C_ADDR, DATA_IN_A) # Send to Group A
-		sar.write(f'{DATA_IN_B}\n'.encode()) # Send to Group B
+		#sar.write(f'{DATA_IN_B}\n'.encode()) # Send to Group B
 		send_byte(DATA_IN_C) # Send to Group C
-		#ser.write(f'{DATA_IN_D}\n'.encode()) # Send to Group D
+		ser.write(f'{DATA_IN_D}\n'.encode()) # Send to Group D
 		
 		# 5 Scale to 0–5000 and write to our own Read Address for HMI display
 		# scaled_val = max(0, min(5000, int(partner_val * (5000 / 180))))
@@ -467,6 +494,7 @@ try:
 		time.sleep(0.1)
 
 		print(
+			f"IN CONTROL: GROUP {assigned_group}\n",
 			f"\rGROUP A | ACTIVITY BIT: {ACTIVITY_BIT_A} | ANGLE IN: {DATA_IN_A} | ANGLE OUT: {DATA_OUT_A}\n",
 			f"\rGROUP B | ACTIVITY BIT: {ACTIVITY_BIT_B} | ANGLE IN: {DATA_IN_B} | ANGLE OUT: {DATA_OUT_B}\n",
 			f"\rGROUP C | ACTIVITY BIT: {ACTIVITY_BIT_C} | ANGLE IN: {DATA_IN_C} | ANGLE OUT: {DATA_OUT_C}\n",
