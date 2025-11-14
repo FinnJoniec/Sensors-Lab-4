@@ -162,20 +162,20 @@ def read_byte(timeout=0.5):
 		#	pass
 	return val
 
-def read_frame(timeout=2.0):
+def read_frame(timeout=0.5):
     """Find SYNC, then LEN, then payload bytes; returns list[int] or None."""
     t_dead = time.time() + timeout
     while time.time() < t_dead:
-        b = read_byte(timeout=0.25)
+        b = read_byte(timeout=0.5)
         if b is None:
             continue
         if b == SYNC_BYTE:
-            n = read_byte(timeout=0.25)
+            n = read_byte(timeout=0.5)
             if n is None:
                 return None
             payload = []
             for _ in range(n):
-                bx = read_byte(timeout=0.25)
+                bx = read_byte(timeout=0.5)
                 if bx is None:
                     return None
                 payload.append(bx)
@@ -240,7 +240,7 @@ def send_byte(value):
         # Release DATA so ESP32 can drive it when sending frames
         GPIO.setup(DATA_PIN, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
 
-
+DATA_OUT_B
 # GROUP D - UART
 #sending PICO sensor data to:
 OUTGOING_ADDRESS_D = 27
@@ -257,7 +257,7 @@ parts_d = ""
 
 
 #PLC info
-PLC_IP = "192.168.1.22"
+PLC_IP = "192.168.1.10"
 PLC_PORT = 502
 
 # COMMS FOR GROUPD - UART
@@ -265,9 +265,9 @@ ser = serial.Serial(
 	port = '/dev/serial0',        
 #NameError: name 'READ_DATA_ADDRESS_D'
 	baudrate=9600,
-	timeout=0.05
+	timeout=0.2
 	)
-
+ser.reset_input_buffer()
 
 async def read_from_plc(address):
 	client = AsyncModbusTcpClient(PLC_IP,port=PLC_PORT)
@@ -346,7 +346,7 @@ def group_b():
 	asyncio.run(write_to_plcB(READ_DATA_ADDRESS_B, int(DATA_IN_B)))
 
 	try:
-		ser.readline().decode('utf-8').strip()
+		sar.readline().decode('utf-8').strip()
 		lineB = sar.readline().decode(errors='ignore').strip()
 	except Exception:
 		lineB = ""
@@ -388,11 +388,12 @@ def group_b():
 	# Scale to 0–5000 for HMI
 	scaled_b = max(0, min(5000, int((partner_val_b) * (5000 / 180))))
 	asyncio.run(write_to_plcB(READ_DATA_ADDRESS_B, scaled_b))
+	'''
 
 	# small pacing so B does not starve other IO (keeps same timing you had here)
-	'''
+	
 	time.sleep(0.1)
-
+'''
 def group_c():
     global ACTIVITY_BIT_C, DATA_OUT_C, DATA_IN_C
 
@@ -429,77 +430,141 @@ def group_c():
         asyncio.run(write_to_plc(READ_DATA_ADDRESS_C, DATA_IN_C))
     except Exception as e:
         print("Group C PLC read error:", e)
+'''
+def group_c():
+	global ACTIVITY_BIT_C, DATA_OUT_C, DATA_IN_C
+	
+	# 1) Read one full frame from the ESP32
+	frame = read_frame(timeout=0.5)
+	if frame is None or len(frame) < 1:
+		ACTIVITY_BIT_C = 0
+		return
+	
+	angle_from_esp = int(frame[0])
 
+	# clamp
+	angle_from_esp = max(0, min(180, angle_from_esp))
+	DATA_OUT_C = angle_from_esp
+	ACTIVITY_BIT_C = 1
+	
+	print(f"Group C FRAME: ESP→Pi angle = {DATA_OUT_C}")
+	
+	# 2) Write OUTGOING + ACTIVITY to PLC
+	try:
+		asyncio.run(write_to_plc(OUTGOING_ADDRESS_C, DATA_OUT_C))
+		asyncio.run(write_to_plc(ACTIVITY_ADDRESS_C, ACTIVITY_BIT_C))
+	except Exception as e:
+		print("Group C PLC write error:", e)
+	
+	# 3) Read router/partner angle into DATA_IN_C
+	try:
+		DATA_IN_C = asyncio.run(read_from_plc(INCOMING_ADDRESS_C))
+		DATA_IN_C = max(0, min(180, int(DATA_IN_C)))
+		asyncio.run(write_to_plc(READ_DATA_ADDRESS_C, DATA_IN_C))
+	except Exception as e:
+		print("Group C PLC read error:", e)
+	
+	# 4) **SEND THIS ANGLE BACK TO ESP32**
+	# =====================================================
+	print(f"Group C → ESP32 reply angle = {DATA_IN_C}")
+	send_byte(DATA_IN_C)
+	# =====================================================
 
 
 def group_d():
-	global ACTIVITY_BIT_D, DATA_OUT_D
-	DATA_IN_D = asyncio.run(read_from_plc(INCOMING_ADDRESS_D))	# reading data from PLC
-	asyncio.run(write_to_plc(READ_DATA_ADDRESS_D, int(DATA_IN_D)))   # sending data back to PLC
+	global ACTIVITY_BIT_D, DATA_OUT_D, DATA_IN_D
 
-	data = ser.readline().decode('utf-8').strip()
-	parts = data.split(',')
-	DATA_OUT_D = ''.join(c for c in parts[0] if c.isdigit()) if len(parts) > 0 else None
-	ACTIVITY_BIT_D = ''.join(c for c in parts[1] if c.isdigit()) if len(parts) > 1 else None
-	if len(DATA_OUT_D) > 0:
-		DATA_OUT_D = int(float(DATA_OUT_D))
-		ACTIVITY_BIT_D = int(ACTIVITY_BIT_D)
-	else:
-		DATA_OUT_D = 0
-		ACTIVITY_BIT_D = 0
-	
-	asyncio.run(write_to_plc(OUTGOING_ADDRESS_D, DATA_OUT_D)) # sending GROUP1 data to PLC
-	asyncio.run(write_to_plc(ACTIVITY_ADDRESS_D, ACTIVITY_BIT_D)) # sending GROUP1 ac to PLC
+	# 1) Read partner/bus data from PLC (same as before)
+	DATA_IN_D = asyncio.run(read_from_plc(INCOMING_ADDRESS_D))
+	asyncio.run(write_to_plc(READ_DATA_ADDRESS_D, int(DATA_IN_D)))
+
+    # 2) Attempt to read ONE FULL UART LINE from the Pico
+	raw = ser.readline().decode('utf-8').strip()
+
+    # Debug output (optional)
+	#print(f"[Group D] UART RX → '{raw}'")
+
+    # ---- Parse new data safely ----
+	parts = raw.split(',')
+	if len(parts) != 2:
+        # malformed line → ignore
+		return
+
+	try:
+		angle_val = float(parts[0])
+		activity_val = int(parts[1])
+	except ValueError:
+        # bad formatting → ignore
+		return
+
+    # Clamp angle
+	angle_val = max(0, min(180, angle_val))
+
+    # ---- Update valid data ----
+	DATA_OUT_D = int(angle_val)
+	ACTIVITY_BIT_D = int(activity_val)
+
+    # 3) Write outgoing data to PLC
+	asyncio.run(write_to_plc(OUTGOING_ADDRESS_D, DATA_OUT_D))
+	asyncio.run(write_to_plc(ACTIVITY_ADDRESS_D, ACTIVITY_BIT_D))
 
 try:
-	groups = ['A', 'B', 'C', 'D']
+	groups = ['A']
 	assigned_group = random.choice(groups)
 	last_assignment_time = time.time()
 	while True:
 		group_a()
-		#group_b()
+		group_b()
 		group_c()
-		#group_d()
-		DATA_OUT_C = max(0, min(180, DATA_OUT_C))	
+		group_d()
+		DATA_OUT_C = max(0, min(180, DATA_OUT_C))
 		outgoing_addresses = [OUTGOING_ADDRESS_A, OUTGOING_ADDRESS_B, OUTGOING_ADDRESS_C, OUTGOING_ADDRESS_D]
+		
+		'''
+		add1 = asyncio.run(read_from_plc(4))
+		add2 = asyncio.run(read_from_plc(5))
+		add3 = asyncio.run(read_from_plc(6))
+		add4 = asyncio.run(read_from_plc(7))
+		
+		DATA_IN_A = asyncio.run(read_from_plc(add1))
+		DATA_IN_B = asyncio.run(read_from_plc(add2))
+		DATA_IN_C = asyncio.run(read_from_plc(add3))
+		DATA_IN_D = asyncio.run(read_from_plc(add4))
+		'''
+		
 		if time.time() - last_assignment_time < 30:
 			if assigned_group == 'A':
-				DATA_IN_A = DATA_OUT_A
-				DATA_IN_B = DATA_OUT_A
-				DATA_IN_C = DATA_OUT_A
-				DATA_IN_D = DATA_OUT_A
+				asyncio.run(write_to_plc(49, DATA_OUT_A))
 			elif assigned_group == 'B':
-				DATA_IN_A = DATA_OUT_B
-				DATA_IN_B = DATA_OUT_B
-				DATA_IN_C = DATA_OUT_B
-				DATA_IN_D = DATA_OUT_B
+				asyncio.run(write_to_plc(49, DATA_OUT_B))
 			elif assigned_group == 'C':
-				DATA_IN_A = DATA_OUT_C
-				DATA_IN_B = DATA_OUT_C
-				DATA_IN_C = DATA_OUT_C
-				DATA_IN_D = DATA_OUT_C
+				asyncio.run(write_to_plc(49, DATA_OUT_C))
 			elif assigned_group == 'D':
-				DATA_IN_A = DATA_OUT_D
-				DATA_IN_B = DATA_OUT_D
-				DATA_IN_C = DATA_OUT_D
-				DATA_IN_D = DATA_OUT_D
+				asyncio.run(write_to_plc(49, DATA_OUT_D))
+			
+			angle = asyncio.run(read_from_plc(49))
+			
+			DATA_IN_A = angle
+			DATA_IN_B = angle
+			DATA_IN_C = angle
+			DATA_IN_D = angle
 		else:
 			assigned_group = random.choice(groups)
 			last_assignment_time = time.time()
-		print(DATA_IN_C)
+		
 		bus.write_byte(I2C_ADDR, DATA_IN_A) # Send to Group A
-		#sar.write(f'{DATA_IN_B}\n'.encode()) # Send to Group B
+		sar.write(f'{DATA_IN_B}\n'.encode()) # Send to Group B
 		send_byte(DATA_IN_C) # Send to Group C
 		ser.write(f'{DATA_IN_D}\n'.encode()) # Send to Group D
 		
 		# 5 Scale to 0–5000 and write to our own Read Address for HMI display
-		# scaled_val = max(0, min(5000, int(partner_val * (5000 / 180))))
-		# asyncio.run(write_to_plc(READ_DATA_ADDRESS_D, scaled_val))
+		scaled_val = max(0, min(5000, int(DATA_IN_D * (5000 / 180))))
+		asyncio.run(write_to_plc(READ_DATA_ADDRESS_D, scaled_val))
 
 		time.sleep(0.1)
 
 		print(
-			f"IN CONTROL: GROUP {assigned_group}\n",
+			f"GROUP {assigned_group} is in control.\n",
 			f"\rGROUP A | ACTIVITY BIT: {ACTIVITY_BIT_A} | ANGLE IN: {DATA_IN_A} | ANGLE OUT: {DATA_OUT_A}\n",
 			f"\rGROUP B | ACTIVITY BIT: {ACTIVITY_BIT_B} | ANGLE IN: {DATA_IN_B} | ANGLE OUT: {DATA_OUT_B}\n",
 			f"\rGROUP C | ACTIVITY BIT: {ACTIVITY_BIT_C} | ANGLE IN: {DATA_IN_C} | ANGLE OUT: {DATA_OUT_C}\n",
