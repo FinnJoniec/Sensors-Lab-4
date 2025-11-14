@@ -117,7 +117,7 @@ async def write_to_plcB(address, send_data):
 
 
 # GROUP C - Custom GPIO Clock/Data
-#sending PICO sensor data to:
+
 OUTGOING_ADDRESS_C = 26
 DATA_OUT_C = 0
 #sending PICO activity bit:
@@ -128,7 +128,7 @@ INCOMING_ADDRESS_C = 1
 DATA_IN_C = 0
 #sending PICO's read data to:
 READ_DATA_ADDRESS_C = 30    
-parts_c = ""
+parts_c = "" 
                                                                      
 # Group C fixed pin variables
 CLOCK_PIN = 18        # Pi BCM 18 (wire to ESP32 GPIO26)
@@ -182,7 +182,7 @@ def read_frame(timeout=2.0):
             return payload
     return None
 
-
+'''
 def send_byte(value):
 	"""
 	Pi replies one byte while ESP32 supplies CLOCK for the reply.
@@ -196,16 +196,49 @@ def send_byte(value):
 	time.sleep(.0002)
 	try:
 		for i in range(7, -1, -1):
-			#bit = (value >> i) & 1
+			bit = (value >> i) & 1
 			#GPIO.output(DATA_PIN, bit) 
-			if not _wait_level(CLOCK_PIN, 1, 0.01):  # wait rising
+			if not _wait_level(CLOCK_PIN, 1, 0.02):  # wait rising
 				break
-			GPIO.output(DATA_PIN, (value >> i) & 1)
-			if not _wait_level(CLOCK_PIN, 0, 0.01):  # wait falling
+			GPIO.output(DATA_PIN, bit)
+			if not _wait_level(CLOCK_PIN, 0, 0.02):  # wait falling
 				break
 		time.sleep(.0005)
 	finally:
 		GPIO.setup(DATA_PIN, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+'''
+
+def send_byte(value):
+    """
+    Send one byte back to ESP32.
+    ESP32 is clock master for this direction:
+      - ESP32 toggles CLOCK HIGH/LOW 8 times
+      - Pi sets DATA bit while CLOCK is HIGH
+    """
+    # Drive DATA so we can output bits
+    GPIO.setup(DATA_PIN, GPIO.OUT, initial=GPIO.LOW)
+
+    try:
+        for i in range(7, -1, -1):
+            bit = (value >> i) & 1
+
+            # Wait for ESP32 to raise CLOCK
+            if not _wait_level(CLOCK_PIN, 1, 0.02):
+                return  # timeout or no clock
+
+            # Put our bit on DATA while CLOCK is HIGH
+            GPIO.output(DATA_PIN, bit)
+
+            # Wait for ESP32 to lower CLOCK
+            if not _wait_level(CLOCK_PIN, 0, 0.02):
+                return  # timeout or no clock
+
+        # tiny settling delay
+        time.sleep(0.0005)
+
+    finally:
+        # Release DATA so ESP32 can drive it when sending frames
+        GPIO.setup(DATA_PIN, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
 
 
 # GROUP D - UART
@@ -360,71 +393,43 @@ def group_b():
 	'''
 	time.sleep(0.1)
 
-	
-'''	
-def group_c_read():
-	global DATA_OUT_C
-	payload = read_byte()
-	if payload is None:
-		return
-	DATA_OUT_C = max(0, min(180, payload))
-'''	
 def group_c():
-		global ACTIVITY_BIT_C, DATA_OUT_C, DATA_IN_C
-		#payload = read_frame(timeout=2.0)
-		payload = read_byte()
-		if payload is None:
-			ACTIVITY_BIT_C = 0
-			return  # nothing received this tick
-		#DATA_OUT_C = payload & 0xFF
-		DATA_OUT_C = max(0, min(180, payload))
-		ACTIVITY_BIT_C = 1
-		# 2) REPLY IMMEDIATELY so the ESP32 sees it during its reply window
-		#DATA_IN_C = (0) & 0xFF
-		#reply_ok = send_byte(DATA_IN_C)
-		#if not reply_ok:
-			#print("Group C: send_byte failed or times out")
-		#ok = send_byte(DATA_IN_C)
+    global ACTIVITY_BIT_C, DATA_OUT_C, DATA_IN_C
 
-		#print(f"Group C Angle -> Received: {DATA_OUT_C}, Sent: {DATA_IN_C}, reply_ok={ok}")
+    # 1) Read one full frame from the ESP32
+    frame = read_frame(timeout=0.5)
+    if frame is None or len(frame) < 1:
+        ACTIVITY_BIT_C = 0
+        return
 
-		# 3) AFTER replying, do slower I/O (PLC + serial)
-		try:
-			asyncio.run(write_to_plc(OUTGOING_ADDRESS_C, int(DATA_OUT_C)))
-			asyncio.run(write_to_plc(ACTIVITY_ADDRESS_C, int(ACTIVITY_BIT_C)))
-		except Exception as e:
-			print("write plc error:", e)
-		try:
-			# Read from PLC and mirror back
-			DATA_IN_C = asyncio.run(read_from_plc(INCOMING_ADDRESS_C))
-			DATA_IN_C = max(0, min(180, DATA_IN_C))
-			asyncio.run(write_to_plc(READ_DATA_ADDRESS_C, int(DATA_IN_C)))
-			# Optional serial scan (make sure 'ser' exists and has small timeout)
-			'''
-			try:
-				line = ser.readline().decode('utf-8', errors='ignore').strip()
-			except Exception:
-				line = ""
-			
+    angle_from_esp = int(frame[0])  # ANGLE byte from ESP
 
-			if line:
-				parts = line.split(',')
-				DATA_OUT_C = ''.join(c for c in parts[0] if c.isdigit()) if len(parts) > 0 else ""
-				ACTIVITY_BIT_C  = ''.join(c for c in parts[1] if c.isdigit()) if len(parts) > 1 else ""
-				if DATA_OUT_C== "":
-					DATA_OUT_C = 0
-					ACTIVITY_BIT_C  = 0
-				else:
-					DATA_OUT_C = int(float(DATA_OUT_C))
-					ACTIVITY_BIT_C  = int(ACTIVITY_BIT_C) if ACTIVITY_BIT_C != "" else 0
-			else:
-				DATA_OUT_C = 0
-				ACTIVITY_BIT_C = 0
-			'''
+    # Clamp into 0..180 just to be safe
+    if angle_from_esp < 0:
+        angle_from_esp = 0
+    if angle_from_esp > 180:
+        angle_from_esp = 180
 
-		except Exception as e:
-			print("read plc error", e)
-		
+    DATA_OUT_C = angle_from_esp
+    ACTIVITY_BIT_C = 1
+
+    print(f"Group C FRAME: angle={DATA_OUT_C}")
+
+    # 2) Write our outgoing angle + activity to PLC
+    try:
+        asyncio.run(write_to_plc(OUTGOING_ADDRESS_C, DATA_OUT_C))
+        asyncio.run(write_to_plc(ACTIVITY_ADDRESS_C, ACTIVITY_BIT_C))
+    except Exception as e:
+        print("Group C PLC write error:", e)
+
+    # 3) Read the partner/router angle from PLC into DATA_IN_C
+    try:
+        DATA_IN_C = asyncio.run(read_from_plc(INCOMING_ADDRESS_C))
+        DATA_IN_C = max(0, min(180, int(DATA_IN_C)))
+        asyncio.run(write_to_plc(READ_DATA_ADDRESS_C, DATA_IN_C))
+    except Exception as e:
+        print("Group C PLC read error:", e)
+
 
 
 def group_d():
